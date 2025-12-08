@@ -1085,7 +1085,15 @@ class Trainer:
 
                         all_images = torch.cat(all_images_list, dim = 0)
 
-                        utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}.png'), nrow = int(math.sqrt(self.num_samples)))
+                        # Save as grid image for quick visual inspection
+                        utils.save_image(all_images, str(self.results_folder / f'sample-{milestone}-grid.png'), nrow = int(math.sqrt(self.num_samples)))
+
+                        # Save individual images at full resolution
+                        milestone_dir = self.results_folder / f'sample-{milestone}'
+                        milestone_dir.mkdir(exist_ok = True)
+
+                        for i, img in enumerate(all_images):
+                            utils.save_image(img, str(milestone_dir / f'{i}.png'))
 
                         # whether to calculate fid
 
