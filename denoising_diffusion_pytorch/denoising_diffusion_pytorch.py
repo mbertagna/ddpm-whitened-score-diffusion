@@ -476,6 +476,9 @@ def sigmoid_beta_schedule(timesteps, start = -3, end = 3, tau = 1, clamp_min = 1
     return torch.clip(betas, 0, 0.999)
 
 class GaussianDiffusion(Module):
+    # WSD FIXME: 
+    # Add a fixed gaussian blur kernel std to generate the Gaussian blur kernel K
+    # Implement continuous variance-preserving SDE beta schedule (dependent on t) to get alpha_bar and beta_t?
     def __init__(
         self,
         model,
@@ -511,6 +514,8 @@ class GaussianDiffusion(Module):
 
         assert objective in {'pred_noise', 'pred_x0', 'pred_v'}, 'objective must be either pred_noise (predict noise) or pred_x0 (predict image start) or pred_v (predict v [v-parameterization as defined in appendix D of progressive distillation paper, used in imagen-video successfully])'
 
+        # WSD FIXME:
+        # Use continuous variance-preserving SDE beta schedule instead?
         if beta_schedule == 'linear':
             beta_schedule_fn = linear_beta_schedule
         elif beta_schedule == 'cosine':
@@ -534,6 +539,9 @@ class GaussianDiffusion(Module):
         self.sampling_timesteps = default(sampling_timesteps, timesteps) # default num sampling timesteps to number of timesteps at training
 
         assert self.sampling_timesteps <= timesteps
+        
+        # WSD FIXME:
+        # Use full SDE sampling instead of DDIM sampling (better for few)
         self.is_ddim_sampling = self.sampling_timesteps < timesteps
         self.ddim_sampling_eta = ddim_sampling_eta
 
@@ -547,6 +555,8 @@ class GaussianDiffusion(Module):
 
         # calculations for diffusion q(x_t | x_{t-1}) and others
 
+        # WSD FIXME:
+        # Use continuous alpha_bar and beta_t instead of precomputed values?
         register_buffer('sqrt_alphas_cumprod', torch.sqrt(alphas_cumprod))
         register_buffer('sqrt_one_minus_alphas_cumprod', torch.sqrt(1. - alphas_cumprod))
         register_buffer('log_one_minus_alphas_cumprod', torch.log(1. - alphas_cumprod))
@@ -555,6 +565,9 @@ class GaussianDiffusion(Module):
 
         # calculations for posterior q(x_{t-1} | x_t, x_0)
 
+
+        # WSD FIXME:
+        # Use direct SDE discretization instead of posterior sampling
         posterior_variance = betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
 
         # above: equal to 1. / (1. / (1. - alpha_cumprod_tm1) + alpha_t / beta_t)
@@ -578,6 +591,9 @@ class GaussianDiffusion(Module):
         # derive loss weight
         # snr - signal noise ratio
 
+        # WSD FIXME:
+        # Use simple MSE loss instead of SNR loss weighting (in ddpm paper, see how wieghting term plays a role (if only for stabilization, remove))
+        # Authors reccomend removing this weighting term for training stability
         snr = alphas_cumprod / (1 - alphas_cumprod)
 
         # https://arxiv.org/abs/2303.09556
@@ -602,6 +618,9 @@ class GaussianDiffusion(Module):
     def device(self):
         return self.betas.device
 
+    # WSD FIXME:
+    # Directly predict the whitened score n_theta instead of noise or x0
+    # These methods are not needed for WSD
     def predict_start_from_noise(self, x_t, t, noise):
         return (
             extract(self.sqrt_recip_alphas_cumprod, t, x_t.shape) * x_t -
@@ -626,6 +645,9 @@ class GaussianDiffusion(Module):
             extract(self.sqrt_one_minus_alphas_cumprod, t, x_t.shape) * v
         )
 
+    # WSD FIXME:
+    # Use direct SDE discretization instead of posterior sampling
+    # This method is not needed for WSD
     def q_posterior(self, x_start, x_t, t):
         posterior_mean = (
             extract(self.posterior_mean_coef1, t, x_t.shape) * x_start +
@@ -635,6 +657,9 @@ class GaussianDiffusion(Module):
         posterior_log_variance_clipped = extract(self.posterior_log_variance_clipped, t, x_t.shape)
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
+    # WSD FIXME:
+    # Use direct SDE discretization instead of posterior sampling
+    # This method is not needed for WSD
     def model_predictions(self, x, t, x_self_cond = None, clip_x_start = False, rederive_pred_noise = False):
         model_output = self.model(x, t, x_self_cond)
         maybe_clip = partial(torch.clamp, min = -1., max = 1.) if clip_x_start else identity
@@ -660,6 +685,9 @@ class GaussianDiffusion(Module):
 
         return ModelPrediction(pred_noise, x_start)
 
+    # WSD FIXME:
+    # Use direct SDE discretization instead of posterior sampling
+    # This method is not needed for WSD
     def p_mean_variance(self, x, t, x_self_cond = None, clip_denoised = True):
         preds = self.model_predictions(x, t, x_self_cond)
         x_start = preds.pred_x_start
@@ -670,6 +698,9 @@ class GaussianDiffusion(Module):
         model_mean, posterior_variance, posterior_log_variance = self.q_posterior(x_start = x_start, x_t = x, t = t)
         return model_mean, posterior_variance, posterior_log_variance, x_start
 
+    # WSD FIXME:
+    # Implement direct SDE discretization (Euler-Maruyama) instead of posterior sampling
+    # Get beta_t from continuous schedule, get model prediction (whitened score), compute drift, generate structured noise, update
     @torch.inference_mode()
     def p_sample(self, x, t: int, x_self_cond = None):
         b, *_, device = *x.shape, self.device
@@ -679,6 +710,9 @@ class GaussianDiffusion(Module):
         pred_img = model_mean + (0.5 * model_log_variance).exp() * noise
         return pred_img, x_start
 
+    # WSD FIXME:
+    # Replace random noise with structured noise K*z initialization
+    # Generate white noise z, create kernel K, apply convolution to get structured noise K*z
     @torch.inference_mode()
     def p_sample_loop(self, shape, return_all_timesteps = False):
         batch, device = shape[0], self.device
@@ -698,6 +732,9 @@ class GaussianDiffusion(Module):
         ret = self.unnormalize(ret)
         return ret
 
+    # WSD FIXME:
+    # Use full SDE sampling instead of DDIM sampling
+    # This method is not needed for WSD #KEEP
     @torch.inference_mode()
     def ddim_sample(self, shape, return_all_timesteps = False):
         batch, device, total_timesteps, sampling_timesteps, eta, objective = shape[0], self.device, self.num_timesteps, self.sampling_timesteps, self.ddim_sampling_eta, self.objective
@@ -772,6 +809,9 @@ class GaussianDiffusion(Module):
         _, assign = linear_sum_assignment(dist.cpu())
         return torch.from_numpy(assign).to(dist.device)
 
+    # WSD FIXME:
+    # Used by p_losses
+    # Replace random noise with structured noise K*z
     @autocast('cuda', enabled = False)
     def q_sample(self, x_start, t, noise = None):
         noise = default(noise, lambda: torch.randn_like(x_start))
@@ -785,12 +825,16 @@ class GaussianDiffusion(Module):
             extract(self.sqrt_one_minus_alphas_cumprod, t, x_start.shape) * noise
         )
 
+    # WSD FIXME:
+    # Convert DDPM loss to WSD loss
     def p_losses(self, x_start, t, noise = None, offset_noise_strength = None):
         b, c, h, w = x_start.shape
 
+        # WSD FIXME: Generate white noise z (will be convolved with K)
         noise = default(noise, lambda: torch.randn_like(x_start))
 
         # offset noise - https://www.crosslabs.org/blog/diffusion-with-offset-noise
+        # WSD FIXME: Offset noise is not used in WSD
 
         offset_noise_strength = default(offset_noise_strength, self.offset_noise_strength)
 
@@ -799,12 +843,14 @@ class GaussianDiffusion(Module):
             noise += offset_noise_strength * rearrange(offset_noise, 'b c -> b c 1 1')
 
         # noise sample
+        # WSD FIXME: Create structured noise K*z
 
         x = self.q_sample(x_start = x_start, t = t, noise = noise)
 
         # if doing self-conditioning, 50% of the time, predict x_start from current set of times
         # and condition with unet with that
         # this technique will slow down training by 25%, but seems to lower FID significantly
+        # WSD FIXME: Self-conditioning? (DROP FOR NOW)
 
         x_self_cond = None
         if self.self_condition and random() < 0.5:
@@ -816,6 +862,7 @@ class GaussianDiffusion(Module):
 
         model_out = self.model(x, t, x_self_cond)
 
+        # WSD FIXME: Replace with whitened score target from x_0, x_t, beta_t, alpha_bar
         if self.objective == 'pred_noise':
             target = noise
         elif self.objective == 'pred_x0':
@@ -826,6 +873,7 @@ class GaussianDiffusion(Module):
         else:
             raise ValueError(f'unknown objective {self.objective}')
 
+        # WSD FIXME: Use simple MSE loss without loss_weight
         loss = F.mse_loss(model_out, target, reduction = 'none')
         loss = reduce(loss, 'b ... -> b', 'mean')
 
